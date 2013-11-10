@@ -1,0 +1,25 @@
+{
+  "name": "PlayCommander-server",
+  "version": "0.0.1",
+  "description": "A remote control for Google Play Music",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/jj56/PlayCommander-server.git"
+  },
+  "keywords": [
+    "google",
+    "play",
+    "music",
+    "remote"
+  ],
+  "dependencies": {
+    "ws": "~0.4.31",
+    "colors": "~0.6.2"
+  },
+  "author": "Jamie McClymont",
+  "license": "GPL",
+  "bugs": {
+    "url": "https://github.com/jj56/PlayCommander-server/issues"
+  }
+}

@@ -21,5 +21,8 @@
   "license": "GPL",
   "bugs": {
     "url": "https://github.com/jj56/PlayCommander-server/issues"
+  },
+  "devDependencies": {
+    "source-map-support": "~0.2.3"
   }
 }

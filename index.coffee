@@ -1,11 +1,19 @@
 logger = new (require "./logger")
 ws = require("ws").Server
 
+# Dev deps
+
+try require('source-map-support').install()
+
 server = new ws {port: 8081}
 
 usedPairCodes = []
-playerRemotesMap = {}
+playerRemoteMaps = {}
 orphanRemotes = []
+
+comparisonIDcounter = 0
+
+uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 genPairCode = ->
   code = 0
@@ -19,6 +27,12 @@ genPairCode = ->
 
 server.on "connection", (socket) ->
   logger.log "^ #{server.clients.length} online"
+
+  socket.toString = ->
+    unless @comparisonID?
+      @comparisonID = "WebSocket #" + (comparisonIDcounter++).toString()
+
+    @comparisonID
 
   socket.sendMessage = (type, payload = {}) ->
     message = {
@@ -35,30 +49,36 @@ server.on "connection", (socket) ->
     try
       if socket.clientType?
         if socket.clientType is "player"
-          # Disconnect all the remotes
-          if socket of playerRemotesMap
-            for remote in playerRemotesMap[socket]
-              remote.sendMessage("noplayer", {on: "playerclose"})
-              remote.close()
+          # We don't need to do any cleanup if the socket isn't in the prm
+          if socket in playerRemoteMaps
+            # Tell all the players that they don't have a remote no more
+            for remote in playerRemoteMaps[socket].remotes
+              remote.sendMessage("noplayer", {cause: "dc"})
 
-          # Remove player from prm
-          delete playerRemotesMap[socket]
+            # Remove player from prm
+            delete playerRemoteMaps[socket]
 
         else if socket.clientType is "remote"
           # Remove remote from prm
-          playerRemotesMap.splice playerRemotesMap.indexOf
-    catch
-      logger.error "Error occoured"
+          remote = findPlayerByRemote socket
+          if remote
+            playerRemoteMaps[remote].remotes.splice playerRemoteMaps[remote].remotes.indexOf(socket), 1
+          else
+            loger.warn "Remote not in prm on disconnect"
+
+    catch error
+      logger.error "An unknown error occoured while handling a disconnection event"
+      logger.error "stacktrace: #{error.stack}"
 
   socket.on "message", (message) ->
     data = try JSON.parse message
 
     if data is undefined
-      logger.error "Received invalid JSON from client: #{message}"
+      logger.warn "Received invalid JSON from client: #{message}"
       return
 
     if data.type is undefined or data.payload is undefined
-      logger.error "Received invalid type/payload from client: #{message}"
+      logger.warn "Received invalid type/payload from client: #{message}"
       return
 
     try
@@ -67,24 +87,20 @@ server.on "connection", (socket) ->
       logger.error "An unknown error occoured while handling a message:"
       logger.error "> type: #{data.type}"
       logger.error "> payload: #{JSON.stringify data.payload}"
+      logger.error "> stacktrace: #{error.stack}"
 
       socket.close()
 
 handleMessage = (socket, type, payload) ->
   # Handle various possible errors
-  # No type or payload in the message
   unless type? and payload?
-    logger.error "Message has no type or payload"
+    logger.warn "Received a message with no type or payload"
     return socket.close()
-
-  # Type or payload has the wrong type
   unless typeof type is "string" and typeof payload is "object"
-    logger.error "Type isn't string or payload isn't object"
+    logger.warn "Received a message with a weirdly typed 'type' or 'payload'"
     return socket.close()
-
-  # Payload contains no clientType
   unless payload.clientType? and (payload.clientType is "remote" or payload.clientType is "player")
-    logger.error "Message has no/malformed clientType"
+    logger.warn "Received a message has no/malformed clientType"
     return socket.close()
 
   # Save clientType to socket if it isn't already saved
@@ -93,27 +109,50 @@ handleMessage = (socket, type, payload) ->
   if payload.clientType is "player"
     if type is "auth"
       # Handle various possible explosions
-      if socket of playerRemotesMap     then logger.error "Player's socket already in playerRemotesMap on auth"; return socket.close()
-      if findPlayerByUUID(payload.uuid) then logger.error "Found a player in the prm with the same uuid as connecting player"; return socket.close()
-      unless payload.uuid?              then logger.error "Player auth frame has no uuid"; return socket.close()
+      if socket of playerRemoteMaps
+        logger.error "Player's socket already in playerRemoteMaps on auth"
+        return socket.close()
+      if findPlayerByUUID(payload.uuid)
+        logger.error "Found a player in the prm with the same uuid as connecting player"
+        return socket.close()
+      unless payload.uuid?
+        logger.warn "Player auth message has no uuid"
+        return socket.close()
+      unless uuidRegex.test(payload.uuid)
+        logger.warn "Received non-compliant UUID (#{payload.uuid})"
+        return socket.close()
+
 
       # Save the UUID
       socket.uuid = payload.uuid
 
       # Put socket in the map
-      playerRemotesMap[socket] = []
+      playerRemoteMaps[socket] =
+        player: socket
+        remotes: []
 
-      # Acknoledge the authentication with a pairing code
+      # Acknoledge the authentication, sending a pairing code
       paircode = genPairCode()
       socket.sendMessage("ack", {paircode: paircode})
 
       # Log the successful authentication
       logger.log "Authed new player (id #{payload.uuid}) with pairing code #{paircode}"
   else if payload.clientType is "remote"
+    if type is "getuuid"
+      # The client has a pairing code, and wants to find the UUID of its client
+      # for player of playerRemotesMap
+      console.log()
     if type is "command"
       # Send a command
       return
 
 findPlayerByUUID = (uuid) ->
-  return player for player of playerRemotesMap when player.uuid is uuid
+  return map.player for id, map of playerRemoteMaps when map.player.uuid is uuid
+  return false
+
+findPlayerByRemote = (remote) ->
+  for id, map of playerRemoteMaps
+    if map.remotes.indexOf(remote) isnt -1
+      return map.player
+
   return false

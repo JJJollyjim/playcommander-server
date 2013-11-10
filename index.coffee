@@ -54,20 +54,34 @@ server.on "connection", (socket) ->
         if socket.clientType is "player"
           # We don't need to do any cleanup if the socket isn't in the prm
           if socket of playerRemoteMaps
-            # Tell all the players that they don't have a remote no more
             for remote in playerRemoteMaps[socket].remotes
-              remote.sendMessage("noplayer", {cause: "dc"})
+              # Inform the remotes about the death of their parent
+              remote.sendMessage("playerdied")
+
+              # Throw 'em in an orphanage
+              orphanRemotes.push remote
 
             # Remove player from prm
             delete playerRemoteMaps[socket]
+          else
+            logger.error "Player not in prm on diconnect"
 
         else if socket.clientType is "remote"
           # Remove remote from prm
-          remote = findPlayerByRemote socket
-          if remote
-            playerRemoteMaps[remote].remotes.splice playerRemoteMaps[remote].remotes.indexOf(socket), 1
+          player = findPlayerByRemote socket
+          if player
+            playerRemoteMaps[player].remotes.splice playerRemoteMaps[player].remotes.indexOf(socket), 1
+
+            # Inform the player about the loss of it's child
+            player.sendMessage "remotenum", num: playerRemoteMaps[player].remotes.length
           else
-            logger.warn "Remote not in prm on disconnect"
+            # Remote isn't in the prm
+            # Is it in the orphanage?
+            if socket in orphanRemotes
+              # Expell it from the orphanage!
+              orphanRemotes.splice orphanRemotes.indexOf(socket), 1
+            else
+              logger.error "Remote not in the prm or orphanage on disconnect"
 
     catch error
       logger.error "An unknown error occoured while handling a disconnection event"
@@ -137,6 +151,21 @@ handleMessage = (socket, type, payload) ->
       socket.paircode = genPairCode()
       socket.sendMessage("ack", {paircode: socket.paircode})
 
+      # Find any orphaned remotes to be adopted by this player
+      for orphan in orphanRemotes
+        if orphan.playerUUID is payload.uuid
+          # Get out of that smelly old orphanage
+          orphanRemotes.splice orphanRemotes.indexOf(orphan), 1
+
+          # Into your brand new home
+          playerRemoteMaps[socket].remotes.push orphan
+
+          # Whadda ya think, kiddo?
+          orphan.sendMessage "connect"
+
+          # We'd better tell the parent at some point, too
+          socket.sendMessage "remotenum", num: playerRemoteMaps[socket].remotes.length
+
       # Log the successful authentication
       logger.log "Authed new player (id #{payload.uuid}) with pairing code #{socket.paircode}"
 
@@ -164,7 +193,33 @@ handleMessage = (socket, type, payload) ->
       else
         socket.sendMessage "npair"
 
-    if type is "command"
+    else if type is "connect"
+      # The client knows the UUID they want to connect to (probbably from a previous pair)
+
+      # Handle possible errors
+      unless payload.uuid?
+        logger.warn "Remote sent no UUID for connection"
+        return socket.close()
+
+      socket.playerUUID = payload.uuid
+
+      player = findPlayerByUUID payload.uuid
+      unless player
+        # The player that the remote is looking for isn't connected
+        socket.sendMessage "nconnect"
+
+        orphanRemotes.push socket
+      else
+        # Tell the remote that it's connected
+        socket.sendMessage "connect"
+
+        # Add it to the prm
+        playerRemoteMaps[player].remotes.push socket
+
+        # Tell the player that it has a new remote
+        player.sendMessage "remotenum", num: playerRemoteMaps[player].remotes.length
+
+    else if type is "command"
       # Send a command
       return
 

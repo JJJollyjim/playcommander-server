@@ -13,7 +13,10 @@ orphanRemotes = []
 
 comparisonIDcounter = 0
 
-uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+regexes =
+  uuid: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  paircode: /^[0-9a-f]{6}$/i
+
 
 genPairCode = ->
   code = 0
@@ -50,7 +53,7 @@ server.on "connection", (socket) ->
       if socket.clientType?
         if socket.clientType is "player"
           # We don't need to do any cleanup if the socket isn't in the prm
-          if socket in playerRemoteMaps
+          if socket of playerRemoteMaps
             # Tell all the players that they don't have a remote no more
             for remote in playerRemoteMaps[socket].remotes
               remote.sendMessage("noplayer", {cause: "dc"})
@@ -118,10 +121,9 @@ handleMessage = (socket, type, payload) ->
       unless payload.uuid?
         logger.warn "Player auth message has no uuid"
         return socket.close()
-      unless uuidRegex.test(payload.uuid)
+      unless regexes.uuid.test(payload.uuid)
         logger.warn "Received non-compliant UUID (#{payload.uuid})"
         return socket.close()
-
 
       # Save the UUID
       socket.uuid = payload.uuid
@@ -132,16 +134,36 @@ handleMessage = (socket, type, payload) ->
         remotes: []
 
       # Acknoledge the authentication, sending a pairing code
-      paircode = genPairCode()
-      socket.sendMessage("ack", {paircode: paircode})
+      socket.paircode = genPairCode()
+      socket.sendMessage("ack", {paircode: socket.paircode})
 
       # Log the successful authentication
-      logger.log "Authed new player (id #{payload.uuid}) with pairing code #{paircode}"
+      logger.log "Authed new player (id #{payload.uuid}) with pairing code #{socket.paircode}"
+
   else if payload.clientType is "remote"
-    if type is "getuuid"
+    if type is "pair"
       # The client has a pairing code, and wants to find the UUID of its client
-      # for player of playerRemotesMap
-      console.log()
+
+      # Handle possible errors
+      unless payload.paircode?
+        logger.warn "Remote sent no paircode in pairing"
+        return socket.close()
+      unless regexes.uuid.test(payload.paircode)
+        logger.warn "Remote sent an invalid paircode in pairing (#{payload.paircode})"
+        return socket.close()
+
+      payload.paircode = payload.paircode.toLowerCase()
+
+      foundplayer = false
+      for id, map of playerRemoteMaps
+        if map.player.paircode is payload.paircode
+          foundplayer = map.player
+
+      if foundplayer
+        socket.sendMessage "pair", uuid: foundplayer.uuid
+      else
+        socket.sendMessage "npair"
+
     if type is "command"
       # Send a command
       return

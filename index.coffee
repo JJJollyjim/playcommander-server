@@ -67,7 +67,7 @@ server.on "connection", (socket) ->
           if remote
             playerRemoteMaps[remote].remotes.splice playerRemoteMaps[remote].remotes.indexOf(socket), 1
           else
-            loger.warn "Remote not in prm on disconnect"
+            logger.warn "Remote not in prm on disconnect"
 
     catch error
       logger.error "An unknown error occoured while handling a disconnection event"
@@ -148,7 +148,7 @@ handleMessage = (socket, type, payload) ->
       unless payload.paircode?
         logger.warn "Remote sent no paircode in pairing"
         return socket.close()
-      unless regexes.uuid.test(payload.paircode)
+      unless regexes.paircode.test(payload.paircode)
         logger.warn "Remote sent an invalid paircode in pairing (#{payload.paircode})"
         return socket.close()
 
